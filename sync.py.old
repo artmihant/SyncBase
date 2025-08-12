@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+from dotenv import load_dotenv
+
+# Добавляем текущую директорию в путь для импорта
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sync_project import SyncProject
+
+
+class KnowledgeBaseSync:
+    """Класс для управления всей базой знаний"""
+    
+    def __init__(self, base_path: str, token: str):
+        self.base_path = Path(base_path)
+        self.token = token
+        self.projects_cache_file = self.base_path / ".knowledge_base_cache.json"
+        
+    def discover_projects(self) -> List[str]:
+        """Обнаруживает все проекты в базе знаний"""
+        projects = []
+        
+        # Ищем структуру Категория/Проект
+        for category_dir in self.base_path.iterdir():
+            if category_dir.is_dir() and not category_dir.name.startswith('.'):
+                for project_dir in category_dir.iterdir():
+                    if project_dir.is_dir():
+                        # Проверяем, что это действительно проект (есть VERSION файл или другие признаки)
+                        if self._is_valid_project(project_dir):
+                            relative_path = project_dir.relative_to(self.base_path)
+                            projects.append(str(relative_path))
+        
+        return sorted(projects)
+    
+    def _is_valid_project(self, project_dir: Path) -> bool:
+        """Проверяет, является ли директория валидным проектом"""
+        # Проект считается валидным, если есть хотя бы один из этих файлов
+        project_indicators = [
+            'VERSION',
+            '.syncignore', 
+            'README.md',
+            'package.json',
+            'requirements.txt',
+            'Pipfile',
+            'Dockerfile'
+        ]
+        
+        for indicator in project_indicators:
+            if (project_dir / indicator).exists():
+                return True
+        
+        # Или если есть подпапки src, docs, tests
+        src_dirs = ['src', 'docs', 'tests', 'assets', 'images']
+        for src_dir in src_dirs:
+            if (project_dir / src_dir).exists():
+                return True
+                
+        return False
+    
+    def get_project_status(self, project_path: str) -> str:
+        """Определяет статус проекта, делегируя логику SyncProject"""
+        try:
+            project_local_path = self.base_path / project_path
+            cloud_path = f"app:/{project_path}"
+            
+            sync_project = SyncProject(
+                str(project_local_path),
+                cloud_path,
+                self.token
+            )
+            
+            return sync_project.get_status()
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка получения статуса проекта {project_path}: {e}")
+            return "unknown"
+    
+    def get_project_cache(self, project_path: str) -> Optional[Dict]:
+        """Получает кэш проекта, делегируя логику SyncProject"""
+        try:
+            project_local_path = self.base_path / project_path
+            cloud_path = f"app:/{project_path}"
+            
+            sync_project = SyncProject(
+                str(project_local_path),
+                cloud_path,
+                self.token
+            )
+            
+            return sync_project.get_cache()
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка получения кэша проекта {project_path}: {e}")
+            return None
+    
+    def status(self):
+        """Команда: sync.py status - быстрый обзор состояния всех проектов"""
+        print("📊 Статус базы знаний...")
+        
+        projects = self.discover_projects()
+        if not projects:
+            print("❌ Проекты не найдены")
+            return
+        
+        print(f"🔍 Найдено проектов: {len(projects)}")
+        
+        # Анализируем статусы
+        status_counts = {
+            'synced': 0,
+            'needs_sync': 0,
+            'unknown': 0,
+            'empty': 0
+        }
+        
+        total_size = 0
+        total_files = 0
+        
+        print("\n📋 Статус проектов:")
+        print("-" * 80)
+        
+        for project in projects:
+            status = self.get_project_status(project)
+            status_counts[status] += 1
+            
+            cache = self.get_project_cache(project)
+            if cache:
+                stats = cache.get('statistics', {})
+                project_size = stats.get('total_size', 0)
+                project_files = stats.get('total_files', 0)
+                total_size += project_size
+                total_files += project_files
+                
+                size_str = self._format_size(project_size)
+                files_str = f"{project_files} файлов"
+                
+                status_emoji = {
+                    'synced': '✅',
+                    'needs_sync': '🔄',
+                    'unknown': '❓',
+                    'empty': '📁'
+                }.get(status, '🔄')
+                
+                print(f"{status_emoji} {project:<40} {files_str:<15} {size_str}")
+            else:
+                print(f"🔄 {project:<40} кэш отсутствует")
+        
+        print("-" * 80)
+        print(f"📈 Общая статистика:")
+        print(f"   Всего проектов: {len(projects)}")
+        print(f"   Синхронизировано: {status_counts['synced']}")
+        print(f"   Требуют синхронизации: {status_counts['needs_sync']}")
+        print(f"   Неизвестный статус: {status_counts['unknown']}")
+        print(f"   Пустые: {status_counts['empty']}")
+        print(f"   Общий размер: {self._format_size(total_size)}")
+        print(f"   Общее количество файлов: {total_files}")
+    
+    def list(self):
+        """Команда: sync.py list - список всех проектов с их статусом"""
+        print("📋 Список проектов в базе знаний:")
+        print("-" * 80)
+        
+        projects = self.discover_projects()
+        if not projects:
+            print("❌ Проекты не найдены")
+            return
+        
+        for i, project in enumerate(projects, 1):
+            status = self.get_project_status(project)
+            cache = self.get_project_cache(project)
+            
+            status_emoji = {
+                'synced': '✅',
+                'needs_sync': '🔄',
+                'unknown': '❓',
+                'empty': '📁'
+            }.get(status, '🔄')
+            
+            if cache:
+                stats = cache.get('statistics', {})
+                last_modified = stats.get('last_modified', 'неизвестно')
+                if last_modified != 'неизвестно':
+                    try:
+                        dt = datetime.datetime.fromisoformat(last_modified)
+                        last_modified = dt.strftime("%Y-%m-%d %H:%M")
+                    except:
+                        pass
+                
+                print(f"{i:2d}. {status_emoji} {project}")
+                print(f"     📅 Последнее изменение: {last_modified}")
+                print(f"     📊 Файлов: {stats.get('total_files', 0)}, Размер: {self._format_size(stats.get('total_size', 0))}")
+            else:
+                print(f"{i:2d}. {status_emoji} {project}")
+                print(f"     ⚠️ Кэш отсутствует")
+            
+            if i < len(projects):
+                print()
+    
+    def all(self):
+        """Команда: sync.py all - синхронизация всех проектов"""
+        print("🔄 Синхронизация всех проектов...")
+        
+        projects = self.discover_projects()
+        if not projects:
+            print("❌ Проекты не найдены")
+            return
+        
+        print(f"📋 Найдено проектов для синхронизации: {len(projects)}")
+        
+        # Сначала показываем статус
+        needs_sync = []
+        for project in projects:
+            status = self.get_project_status(project)
+            if status == 'needs_sync':
+                needs_sync.append(project)
+        
+        if not needs_sync:
+            print("✅ Все проекты уже синхронизированы!")
+            return
+        
+        print(f"🔄 Проекты, требующие синхронизации: {len(needs_sync)}")
+        for project in needs_sync:
+            print(f"   - {project}")
+        
+        # Запрашиваем подтверждение
+        response = input("\n❓ Продолжить синхронизацию? (y/N): ").strip().lower()
+        if response not in ['y', 'yes', 'да']:
+            print("❌ Синхронизация отменена")
+            return
+        
+        # Синхронизируем каждый проект
+        print("\n🚀 Начинаем синхронизацию...")
+        
+        for i, project in enumerate(needs_sync, 1):
+            print(f"\n[{i}/{len(needs_sync)}] Синхронизация проекта: {project}")
+            
+            try:
+                project_local_path = self.base_path / project
+                cloud_path = f"app:/{project}"
+                
+                sync_project = SyncProject(
+                    str(project_local_path),
+                    cloud_path,
+                    self.token
+                )
+                
+                # Определяем направление синхронизации на основе статуса
+                status = self.get_project_status(project)
+                if status == 'needs_sync':
+                    # Простая эвристика: если есть локальные изменения, сохраняем
+                    # иначе загружаем
+                    sync_project.sync_save()
+                
+                print(f"   ✅ Проект {project} синхронизирован")
+                
+            except Exception as e:
+                print(f"   ❌ Ошибка синхронизации проекта {project}: {e}")
+        
+        print(f"\n🎉 Синхронизация завершена! Обработано проектов: {len(needs_sync)}")
+    
+    def _format_size(self, size_bytes: int) -> str:
+        """Форматирует размер в читаемом виде"""
+        if size_bytes == 0:
+            return "0 B"
+        
+        units = ['B', 'KB', 'MB', 'GB']
+        unit_index = 0
+        
+        while size_bytes >= 1024 and unit_index < len(units) - 1:
+            size_bytes /= 1024
+            unit_index += 1
+        
+        return f"{size_bytes:.1f} {units[unit_index]}"
+
+
+def main():
+    """Главная функция"""
+    # Загружаем переменные окружения
+    load_dotenv()
+    
+    YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")
+    BASE_PATH = os.getenv("BASE_PATH")
+    
+    if not YANDEX_DISK_TOKEN or not BASE_PATH:
+        print("❌ Не найдены необходимые переменные окружения YANDEX_DISK_TOKEN и/или BASE_PATH в .env файле.")
+        sys.exit(1)
+    
+    # Создаем экземпляр менеджера базы знаний
+    kb_sync = KnowledgeBaseSync(BASE_PATH, YANDEX_DISK_TOKEN)
+    
+    # Обработка команд
+    if len(sys.argv) < 2:
+        print("❗ Укажите команду: status, list или all")
+        print("   sync.py status - обзор состояния всех проектов")
+        print("   sync.py list   - список всех проектов")
+        print("   sync.py all    - синхронизация всех проектов")
+        sys.exit(1)
+    
+    command = sys.argv[1].lower()
+    
+    if command == "status":
+        kb_sync.status()
+    elif command == "list":
+        kb_sync.list()
+    elif command == "all":
+        kb_sync.all()
+    else:
+        print(f"❌ Неизвестная команда: {command}")
+        print("   Доступные команды: status, list, all")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main() 
