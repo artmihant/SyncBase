@@ -117,7 +117,7 @@ class SyncProject:
     # Файлы, наличествуют только локально
     items_need_for_update: Dict[str, Dict[str, List[SyncItem]]]
 
-    def __init__(self, base_path: Path | str, relative_path: str, token: str):
+    def __init__(self, base_path: Path | str, category_name:str, project_name: str, token: str):
         """
         Инициализация синхронизатора отдельного проекта
         Args:
@@ -125,6 +125,8 @@ class SyncProject:
             cloud_path: Путь к удаленной папке проекта
             token: Токен для доступа к облаку
         """
+
+        relative_path = os.path.join(category_name, project_name)
 
         self.yandex_disk_client = YandexDiskClient(token)
         self.syncignore = SyncIgnore()
@@ -157,9 +159,11 @@ class SyncProject:
     def token(self):
         return self.yandex_disk_client.token
 
+
     def __str__(self):
         """Строковое представление проекта"""
         return f"<{self.relative_path}>"
+
 
     def __repr__(self):
         """Подробное строковое представление проекта"""
@@ -170,6 +174,7 @@ class SyncProject:
         if relative_path:
             return SyncItem(self.local_path / relative_path, self.cloud_path / relative_path, self.token)
         return SyncItem(self.local_path, self.cloud_path, self.token)
+
 
     def local_scan(self):
 
@@ -231,7 +236,6 @@ class SyncProject:
 
         print(f"📊 Требуют синхронизации: {total_sync_objects}")
         print(f"⚡ Время сканирования по API: {cloud_time:.3f}с")
-
 
 
     def _scan_local_items(self, current_path: str):
@@ -387,7 +391,6 @@ class SyncProject:
         
 
         total_size = 0
-        last_modified = None
         
         # Обрабатываем все sync_items
         for relative_path, sync_item in self.sync_items.items():
@@ -447,13 +450,12 @@ class SyncProject:
         
         Примечание: Все файлы и папки фильтруются через .syncignore
         """
-        print(f"📊 Статус проекта {str(self)}...")
+        print(f"\n📊 Статус проекта {str(self)}...")
         
         cache = self.get_cache()
         
         if not cache:
-            print("❌ Кэш проекта отсутствует")
-            print("💡 Выполните 'sync_project.py save' для создания кэша")
+            print("❌ Кэш проекта отсутствует. Сохраните проект на облако для создания кэша")
             return
         
         print(f"✅ Кэш найден (обновлен: {cache['project_info']['last_updated']})")
@@ -533,7 +535,7 @@ class SyncProject:
                 size = current_files[file_path]['size']
                 print(f"   ~ {file_path} ({size} B)")
         
-        print(f"\n💡 Выполните 'sync_project.py save' для синхронизации изменений")
+        print(f"\n💡 Сохраните проект на облако для синхронизации изменений")
     
 
 
@@ -668,12 +670,17 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Получаем относительный путь к проекту относительно base_path
-    relative_path = os.path.relpath(project_local_path, BASE_PATH)
+
+    # Получаем название категории (папка, внутри которой находится папка проекта)
+    category_name = parts[0]
+    project_name = parts[1]
+    relative_path = os.path.join(category_name, project_name)
 
     # Создаём экземпляр SyncProject с вычисленными путями
     project = SyncProject(
         Path(BASE_PATH),
-        relative_path,
+        category_name,
+        project_name,
         YANDEX_DISK_TOKEN
     )
     
@@ -685,7 +692,7 @@ if __name__ == "__main__":
     command = sys.argv[1].lower()
 
     if command == "save":
-        print(f"⏫ Сохраняем изменения на Яндекс.Диск ({relative_path})...")
+        print(f"⏫ Сохраняем изменения на Яндекс.Диск ({category_name})...")
         project.sync_save()
     elif command == "load":
         print(f"⏬ Загружаем изменения из Яндекс.Диска '{relative_path}'...")
