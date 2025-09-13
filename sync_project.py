@@ -191,7 +191,13 @@ class SyncProject:
 
         if syncignore_file.local_type == 'empty':
             syncignore_file.local_path.touch()
-            syncignore_file.local_path.write_text(".git\n")
+            # Вместо записи строки, читаем .syncignore.example из директории скрипта и записываем его содержимое
+            script_dir = Path(__file__).parent
+            example_path = script_dir / '.syncignore.example'
+            if example_path.exists():
+                syncignore_file.local_path.write_text(example_path.read_text(encoding='utf-8'), encoding='utf-8')
+            else:
+                syncignore_file.local_path.write_text(".git\n", encoding='utf-8')
             syncignore_file.local_type = 'file'
         elif syncignore_file.local_type == 'dir':
             raise FileExistsError(f'{syncignore_file} is dir!')
@@ -217,7 +223,7 @@ class SyncProject:
     def cloud_scan(self):
 
         # Затем многопоточно сканируем удаленные файлы (API = узкое место)
-        print("🔍 Многопоточное сканирование удаленных файлов (API)...")
+        print("🔍 Cканирую удаленные файлы...")
         cloud_start = time.time()
         self._scan_cloud_items_parallel()
         cloud_time = time.time() - cloud_start
@@ -263,7 +269,6 @@ class SyncProject:
 
     def _scan_cloud_items_parallel(self):
         """Оптимизированное многопоточное сканирование удаленных файлов и папок"""
-        print("    🚀 Начинаем оптимизированное многопоточное сканирование...")
         
         # Thread-safe доступ к общим словарям
         items_lock = threading.Lock()
@@ -333,8 +338,6 @@ class SyncProject:
         folders_to_scan.append("")
         total_scanned = 0
         
-        print("    ⚡ Запускаем адаптивное многопоточное сканирование...")
-        
         # Итеративное сканирование с адаптивным количеством потоков
         while folders_to_scan:
             # Берем текущую порцию папок для сканирования
@@ -361,12 +364,11 @@ class SyncProject:
             
             print(f"    📊 Просканировано папок: {total_scanned}")
         
-        print(f"    ✅ Оптимизированное многопоточное сканирование завершено! Всего папок: {total_scanned}")
+        print(f"    ✅ Всего просканировано папок: {total_scanned}")
 
 
     def set_cache(self):
         """Создает кэш проекта на основе self.sync_items для быстрого доступа к информации о проекте"""
-        print("📋 Создаем кэш проекта...")
         
         cache_data_files: Dict[str, dict] = {}
         cache_data_dirs: Dict[str, dict] = {}
@@ -381,7 +383,6 @@ class SyncProject:
             "project_info": {
                 "local_path": str(self.local_path),
                 "cloud_path": str(self.cloud_path),
-                "last_updated": datetime.datetime.now().isoformat(),
                 "cache_version": "1.0"
             },
             "files": cache_data_files,
@@ -408,23 +409,22 @@ class SyncProject:
         cache_data_statistics["total_size"] = total_size
         
         # Сохраняем кэш в файл
-        cache_file_path = self.local_path / ".project_cache.json"
+        cache_file_path = self.local_path / ".sync_cache"
         try:
             with open(cache_file_path, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2, ensure_ascii=False)
-            print(f"  ✅ Кэш проекта создан: {cache_file_path}")
         except Exception as e:
             print(f"  ❌ Ошибка создания кэша: {e}")
     
     
     def get_cache(self) -> Optional[Dict]:
         """
-        Читает и возвращает содержимое .project_cache.json
+        Читает и возвращает содержимое .sync_cache
         
         Returns:
             Dict с данными кэша или None если файл не найден
         """
-        cache_file = self.local_path / ".project_cache.json"
+        cache_file = self.local_path / ".sync_cache"
         
         if not cache_file.exists():
             return None
@@ -457,8 +457,7 @@ class SyncProject:
         if not cache:
             print("❌ Кэш проекта отсутствует. Сохраните проект на облако для создания кэша")
             return
-        
-        print(f"✅ Кэш найден (обновлен: {cache['project_info']['last_updated']})")
+       
 
         self.local_scan()
 

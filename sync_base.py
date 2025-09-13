@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Добавляем текущую директорию в путь для импорта
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sync_project import SyncProject
+from sync_project import SyncProject, SyncIgnore
 from yandex_disk_client import YandexDiskClient
 
 
@@ -27,9 +27,14 @@ class SyncBase:
         if not self.base_path.exists():
             return []
         categories: List[str] = []
+        base_syncignore = self._read_base_syncignore()
+
         for entry in sorted(self.base_path.iterdir()):
             if entry.is_dir():
-                categories.append(entry.name)
+                category_name = entry.name
+                # Проверяем, нужно ли игнорировать эту категорию
+                if not base_syncignore.should_ignore(category_name, is_directory=True):
+                    categories.append(category_name)
         return categories
 
     def _get_local_projects(self, category: str) -> List[str]:
@@ -37,19 +42,74 @@ class SyncBase:
         if not category_path.exists() or not category_path.is_dir():
             return []
         projects: List[str] = []
+        category_syncignore = self._read_category_syncignore(category)
+
         for entry in sorted(category_path.iterdir()):
             if entry.is_dir():
-                projects.append(entry.name)
+                project_name = entry.name
+                # Проверяем, нужно ли игнорировать этот проект
+                if not category_syncignore.should_ignore(project_name, is_directory=True):
+                    projects.append(project_name)
         return projects
 
     def _get_cloud_categories(self) -> List[str]:
         items = self.cloud_client.list('app:/') or []
-        return [item.get('name') for item in items if item.get('type') == 'dir']
+        base_syncignore = self._read_base_syncignore()
+
+        categories = []
+        for item in items:
+            if item.get('type') == 'dir':
+                category_name = item.get('name')
+                # Проверяем, нужно ли игнорировать эту категорию
+                if not base_syncignore.should_ignore(category_name, is_directory=True):
+                    categories.append(category_name)
+
+        return sorted(categories)
 
     def _get_cloud_projects(self, category: str) -> List[str]:
         cloud_path = f"app:/{category}"
         items = self.cloud_client.list(cloud_path) or []
-        return [item.get('name') for item in items if item.get('type') == 'dir']
+        category_syncignore = self._read_category_syncignore(category)
+
+        projects = []
+        for item in items:
+            if item.get('type') == 'dir':
+                project_name = item.get('name')
+                # Проверяем, нужно ли игнорировать этот проект
+                if not category_syncignore.should_ignore(project_name, is_directory=True):
+                    projects.append(project_name)
+
+        return sorted(projects)
+
+    # ---------- Методы для работы с .syncignore ----------
+    def _read_base_syncignore(self) -> SyncIgnore:
+        """Читает .syncignore из корня базы для игнорирования категорий"""
+        syncignore_path = self.base_path / '.syncignore'
+        syncignore = SyncIgnore()
+
+        if syncignore_path.exists() and syncignore_path.is_file():
+            try:
+                content = syncignore_path.read_text(encoding='utf-8')
+                syncignore.parse_rules(content)
+            except Exception as e:
+                print(f"⚠️ Не удалось прочитать базовый .syncignore: {e}")
+
+        return syncignore
+
+    def _read_category_syncignore(self, category: str) -> SyncIgnore:
+        """Читает .syncignore из папки категории для игнорирования проектов"""
+        category_path = self.base_path / category
+        syncignore_path = category_path / '.syncignore'
+        syncignore = SyncIgnore()
+
+        if syncignore_path.exists() and syncignore_path.is_file():
+            try:
+                content = syncignore_path.read_text(encoding='utf-8')
+                syncignore.parse_rules(content)
+            except Exception as e:
+                print(f"⚠️ Не удалось прочитать .syncignore для категории '{category}': {e}")
+
+        return syncignore
 
     def _resolve_context(self, cwd_path: str) -> Dict[str, Optional[str]]:
         """Определяет контекст запуска: проект/категория/вне базы.
@@ -87,11 +147,21 @@ class SyncBase:
         cloud_categories = set(self._get_cloud_categories())
         all_categories = sorted(local_categories | cloud_categories)
 
+        print(f"🔍 Найдено категорий: {len(all_categories)} (локальных: {len(local_categories)}, облачных: {len(cloud_categories)})")
+
         for category in all_categories:
+            # Определяем статус категории
+            category_marks: List[str] = []
+            if category in local_categories:
+                category_marks.append("local")
+            if category in cloud_categories:
+                category_marks.append("cloud")
+            category_mark_str = "/".join(category_marks) if category_marks else "—"
+
             local_projects = set(self._get_local_projects(category))
             cloud_projects = set(self._get_cloud_projects(category))
             all_projects = sorted(local_projects | cloud_projects)
-            print(f"\n📂 Категория: {category}")
+            print(f"\n📂 Категория: {category} [{category_mark_str}]")
             if not all_projects:
                 print("  (пусто)")
                 continue

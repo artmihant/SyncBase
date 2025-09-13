@@ -188,7 +188,7 @@ class SyncItem:
 
 
     def download_file(self):
-        self.yandex_disk_client.download(self.local_path, self.cloud_path)
+        self.yandex_disk_client.download(self.cloud_path, self.local_path)
 
     def upload_file(self):
         self.yandex_disk_client.upload(self.local_path, self.cloud_path)
